@@ -6,6 +6,7 @@
 (define-constant ERR_INSUFFICIENT_BALANCE (err u406))
 (define-constant ERR_SONG_ALREADY_EXISTS (err u407))
 (define-constant ERR_INVALID_PARTICIPANT (err u408))
+(define-constant ERR_BATCH_PROCESSING_FAILED (err u409))
 (define-constant TOTAL_PERCENTAGE u10000)
 
 (define-data-var song-counter uint u0)
@@ -87,6 +88,16 @@
     
     (var-set total-earnings (+ (var-get total-earnings) amount))
     (ok amount)
+  )
+)
+
+(define-public (batch-distribute-royalties (distributions (list 10 { song-id: uint, amount: uint })))
+  (let (
+    (results (map process-single-distribution distributions))
+  )
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_NOT_AUTHORIZED)
+    (asserts! (> (len distributions) u0) ERR_BATCH_PROCESSING_FAILED)
+    (ok (len results))
   )
 )
 
@@ -227,5 +238,27 @@
   (begin
     (update-participant-earnings (get song-id acc) participant (get total-amount acc))
     acc
+  )
+)
+
+(define-private (process-single-distribution (distribution { song-id: uint, amount: uint }))
+  (let (
+    (song-id (get song-id distribution))
+    (amount (get amount distribution))
+    (song (unwrap-panic (map-get? songs { song-id: song-id })))
+    (participants (default-to (list) (get participants (map-get? song-participants { song-id: song-id }))))
+  )
+    (if (and (get is-active song) (> amount u0))
+      (begin
+        (fold update-participant-earnings-fold participants { song-id: song-id, total-amount: amount, success: true })
+        (map-set songs
+          { song-id: song-id }
+          (merge song { total-earned: (+ (get total-earned song) amount) })
+        )
+        (var-set total-earnings (+ (var-get total-earnings) amount))
+        true
+      )
+      false
+    )
   )
 )
