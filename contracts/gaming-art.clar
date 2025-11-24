@@ -7,6 +7,8 @@
 (define-constant ERR_SONG_ALREADY_EXISTS (err u407))
 (define-constant ERR_INVALID_PARTICIPANT (err u408))
 (define-constant ERR_BATCH_PROCESSING_FAILED (err u409))
+(define-constant ERR_TRANSFER_TO_SELF (err u410))
+(define-constant ERR_INVALID_NEW_OWNER (err u411))
 (define-constant TOTAL_PERCENTAGE u10000)
 
 (define-data-var song-counter uint u0)
@@ -39,6 +41,20 @@
 (define-map user-earnings
   { user: principal }
   { total-earned: uint, withdrawn: uint }
+)
+
+(define-map song-ownership-history
+  { song-id: uint, transfer-id: uint }
+  { 
+    previous-owner: principal,
+    new-owner: principal,
+    transfer-timestamp: uint
+  }
+)
+
+(define-map song-transfer-count
+  { song-id: uint }
+  { count: uint }
 )
 
 (define-public (create-song (title (string-ascii 100)) (participants (list 20 { participant: principal, percentage: uint, role: (string-ascii 50) })))
@@ -147,6 +163,40 @@
   )
 )
 
+(define-public (transfer-song-ownership (song-id uint) (new-owner principal))
+  (let (
+    (song (unwrap! (map-get? songs { song-id: song-id }) ERR_SONG_NOT_FOUND))
+    (current-owner (get creator song))
+    (transfer-count-data (default-to { count: u0 } (map-get? song-transfer-count { song-id: song-id })))
+    (next-transfer-id (+ (get count transfer-count-data) u1))
+  )
+    (asserts! (or (is-eq tx-sender current-owner) (is-eq tx-sender CONTRACT_OWNER)) ERR_NOT_AUTHORIZED)
+    (asserts! (not (is-eq current-owner new-owner)) ERR_TRANSFER_TO_SELF)
+    (asserts! (not (is-eq new-owner CONTRACT_OWNER)) ERR_INVALID_NEW_OWNER)
+    
+    (map-set songs
+      { song-id: song-id }
+      (merge song { creator: new-owner })
+    )
+    
+    (map-set song-ownership-history
+      { song-id: song-id, transfer-id: next-transfer-id }
+      {
+        previous-owner: current-owner,
+        new-owner: new-owner,
+        transfer-timestamp: stacks-block-height
+      }
+    )
+    
+    (map-set song-transfer-count
+      { song-id: song-id }
+      { count: next-transfer-id }
+    )
+    
+    (ok true)
+  )
+)
+
 (define-read-only (get-song (song-id uint))
   (map-get? songs { song-id: song-id })
 )
@@ -181,6 +231,21 @@
     total-earnings: (var-get total-earnings),
     contract-owner: CONTRACT_OWNER
   }
+)
+
+(define-read-only (get-song-transfer-history (song-id uint) (transfer-id uint))
+  (map-get? song-ownership-history { song-id: song-id, transfer-id: transfer-id })
+)
+
+(define-read-only (get-song-transfer-count (song-id uint))
+  (default-to { count: u0 } (map-get? song-transfer-count { song-id: song-id }))
+)
+
+(define-read-only (get-song-owner (song-id uint))
+  (match (map-get? songs { song-id: song-id })
+    song-data (some (get creator song-data))
+    none
+  )
 )
 
 (define-private (get-percentage (participant { participant: principal, percentage: uint, role: (string-ascii 50) }))
